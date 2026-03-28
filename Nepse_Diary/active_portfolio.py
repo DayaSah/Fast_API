@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 import pandas as pd
 import numpy as np
+from database import get_db_engine
 
 # We assume you have a database.py file or similar that provides a database session
 # from database import get_db
@@ -61,7 +62,7 @@ def calculate_fifo_wacc(df):
 
 
 @router.get("/active_portfolio")
-def get_active_portfolio(engine): # We pass engine here or use dependency injection like: db: Session = Depends(get_db)
+def get_active_portfolio(engine = Depends(get_db_engine)): # We pass engine here or use dependency injection like: db: Session = Depends(get_db)
     """
     Returns the fully calculated active portfolio with live LTP and P/L metrics.
     """
