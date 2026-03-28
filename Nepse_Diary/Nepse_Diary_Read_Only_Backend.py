@@ -91,3 +91,4 @@ async def trigger_github_action():
 # This makes them accessible at /api/portfolio, /api/active_portfolio, etc.
 app.include_router(raw_tables_router, prefix="/api", tags=["Raw Data"])
 app.include_router(active_portfolio_router, prefix="/api", tags=["Analytics"])
+app.include_router(trade_history_router, prefix="/api")
