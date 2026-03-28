@@ -32,7 +32,7 @@ ALLOWED_FRONTEND_URL = "https://dayasah.github.io"
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[ALLOWED_FRONTEND_URL], 
+    allow_origins=["*"], # <--- This allows EVERYONE to talk to the API
     allow_credentials=True,
     # CRITICAL FIX: Added POST and OPTIONS so the Sync button is allowed to communicate
     allow_methods=["GET", "POST", "OPTIONS"], 
