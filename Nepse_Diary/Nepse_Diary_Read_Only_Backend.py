@@ -1,5 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import BackgroundTasks, APIRouter
+from sync import run_full_sync
 from contextlib import asynccontextmanager
 from sqlalchemy import text
 
@@ -7,6 +9,17 @@ from sqlalchemy import text
 from database import get_db_engine
 from raw_tables import router as raw_tables_router
 from active_portfolio import router as active_portfolio_router
+
+
+router = APIRouter()
+@router.post("/api/sync")
+async def trigger_manual_sync(background_tasks: BackgroundTasks):
+    # This tells FastAPI to run this function after responding to the user
+    background_tasks.add_task(run_full_sync)
+    
+    # The frontend gets this response instantly, preventing timeouts
+    return {"status": "success", "message": "Sync initiated in the background. Data will update shortly."}
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
