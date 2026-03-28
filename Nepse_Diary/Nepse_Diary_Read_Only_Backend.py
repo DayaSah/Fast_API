@@ -5,8 +5,8 @@ from sqlalchemy import text
 
 # Import our database and routers
 from database import get_db_engine
-from Nepse_Diary.raw_tables import router as raw_tables_router
-from Nepse_Diary.active_portfolio import router as active_portfolio_router
+from raw_tables import router as raw_tables_router
+from active_portfolio import router as active_portfolio_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
