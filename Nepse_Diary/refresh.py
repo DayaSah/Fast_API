@@ -6,23 +6,26 @@ from fastapi import APIRouter, HTTPException
 
 router = APIRouter()
 
-# These must be set in Render Environment Variables
-GITHUB_PAT = os.getenv("GITHUB_PAT") 
+# Environment Variables from Render
+GITHUB_PAT = os.getenv("GITHUB_PAT")
 REPO_OWNER = "DayaSah"
 REPO_NAME = "My_Nepse_Diary"
 
-@router.post("/refresh-ltp", tags=["System"])
+@router.post("/refresh-ltp")
 async def trigger_github_refresh():
     """
-    This endpoint 'pings' GitHub Actions to run the scraper.
+    Triggers the GitHub Action 'LTP_sync.yml' using Repository Dispatch.
     """
     if not GITHUB_PAT:
-        raise HTTPException(status_code=500, detail="GITHUB_PAT not found in Render Env Vars")
+        raise HTTPException(
+            status_code=500, 
+            detail="GITHUB_PAT is missing in Render environment variables."
+        )
 
     nepal_tz = pytz.timezone('Asia/Kathmandu')
     now = datetime.datetime.now(nepal_tz).strftime("%H:%M:%S")
 
-    # GitHub API URL
+    # The Repository Dispatch URL (Signals the whole repo)
     url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/dispatches"
     
     headers = {
@@ -30,27 +33,28 @@ async def trigger_github_refresh():
         "Accept": "application/vnd.github.v3+json",
     }
     
-    # CRITICAL: 'event_type' must match the 'types' in your .yml file
+    # 'event_type' matches the 'types' in your LTP_sync.yml
     payload = {
         "event_type": "trigger_nepse_sync",
         "client_payload": {"triggered_at": now}
     }
 
     try:
-        # Use a short timeout here so the API responds quickly
         response = requests.post(url, json=payload, headers=headers, timeout=10)
         
+        # GitHub returns 204 No Content on a successful dispatch
         if response.status_code == 204:
             return {
                 "status": "success",
-                "message": "GitHub Action (LTP_sync.yml) triggered!",
-                "requested_at": now
+                "message": "GitHub Action triggered successfully.",
+                "timestamp": now
             }
         else:
             return {
-                "status": "error", 
-                "github_response": response.text,
-                "status_code": response.status_code
+                "status": "github_error",
+                "code": response.status_code,
+                "detail": response.text
             }
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Connection to GitHub failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to connect to GitHub: {str(e)}")
