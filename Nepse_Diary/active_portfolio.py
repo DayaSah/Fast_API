@@ -8,30 +8,43 @@ from database import get_db_engine
 
 router = APIRouter()
 
-def get_chukul_ltp():
+def get_live_prices_with_fallback(conn):
     """
-    Fetches the latest LTP for all symbols from Chukul API.
-    Returns a dictionary mapping: { 'SYMBOL': ltp_value }
+    PRIMARY: Fetch from Chukul API.
+    SECONDARY: If Chukul fails, fetch from public.cache (Database).
     """
     url = "https://chukul.com/api/data/v2/live-market/"
-    headers = {"User-Agent": "Mozilla/5.0"} # Prevents the 'Bot Block'
+    headers = {"User-Agent": "Mozilla/5.0"}
+    
+    # 1. TRY CHUKUL (Primary)
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        print("🌐 Attempting to fetch live prices from Chukul...")
+        response = requests.get(url, headers=headers, timeout=5) # Short timeout
         if response.status_code == 200:
             data = response.json()
-            # Create a dictionary for O(1) lookup speed
-            # Symbol is key, LTP is value
+            print("✅ Chukul Success.")
             return {item['symbol'].upper(): float(item['ltp']) for item in data}
-        return {}
     except Exception as e:
-        print(f"⚠️ Chukul API Fetch Failed: {e}")
-        return {}
+        print(f"⚠️ Chukul failed ({e}). Falling back to Database Cache...")
+
+    # 2. FALLBACK TO DB CACHE (Secondary)
+    try:
+        cache_query = text("SELECT symbol, ltp FROM public.cache")
+        cache_df = pd.read_sql(cache_query, con=conn)
+        if not cache_df.empty:
+            cache_df.columns = [c.lower() for c in cache_df.columns]
+            print("📦 Successfully loaded prices from Database Cache.")
+            return dict(zip(cache_df['symbol'].str.upper(), cache_df['ltp'].astype(float)))
+    except Exception as db_e:
+        print(f"❌ Database Cache also failed: {db_e}")
+    
+    return {}
 
 def calculate_fifo_wacc(df):
-    """ NEPSE-Standard FIFO Calculation remains unchanged """
+    """ Standard NEPSE FIFO Calculation Logic """
     active_holdings = []
     if df.empty: return pd.DataFrame(active_holdings)
-
+    
     df['date'] = pd.to_datetime(df['date'])
     for symbol in df['symbol'].unique():
         symbol_df = df[df['symbol'] == symbol].sort_values('date')
@@ -67,52 +80,35 @@ def calculate_fifo_wacc(df):
 @router.get("/active_portfolio")
 def get_active_portfolio(engine = Depends(get_db_engine)):
     try:
-        # 1. Fetch Portfolio from Database
         with engine.connect() as conn:
+            # 1. Fetch Portfolio
             port_df = pd.read_sql(text("SELECT symbol, qty, net_amount, transaction_type, date FROM public.portfolio"), con=conn)
+            
+            if port_df.empty:
+                return {"status": "success", "data": []}
+            
+            port_df.columns = [c.lower() for c in port_df.columns]
+            active_df = calculate_fifo_wacc(port_df)
+
+            # 2. Get Prices using the new Fallback Function
+            live_prices = get_live_prices_with_fallback(conn)
         
-        if port_df.empty:
-            return {"status": "success", "data": []}
-
-        port_df.columns = [c.lower() for c in port_df.columns]
-
-        # 2. Calculate FIFO Holdings
-        active_df = calculate_fifo_wacc(port_df)
-        if active_df.empty:
-            return {"status": "success", "data": []}
-
-        # 3. LIVE DATA INTEGRATION (Chukul API)
-        # Fetch the dict of {SYMBOL: LTP}
-        live_prices = get_chukul_ltp()
-        
-        # Map Chukul LTP to our DataFrame
-        # If symbol not found in Chukul, we fill it with WACC so P/L is 0 for that item
+        # 3. Integrate Prices (Fallback to WACC if both Chukul & Cache fail for a specific symbol)
         active_df['ltp'] = active_df['symbol'].map(live_prices).fillna(active_df['wacc'])
 
-        # 4. Financial Metrics Calculation
+        # 4. Math Calculations (Current Value, P/L, Weight, Breakeven)
         active_df['current_val'] = active_df['net_qty'] * active_df['ltp']
         active_df['pl_amt'] = active_df['current_val'] - active_df['total_cost']
+        active_df['pl_pct'] = np.where(active_df['total_cost'] > 0, (active_df['pl_amt'] / active_df['total_cost']) * 100, 0)
         
-        active_df['pl_pct'] = np.where(
-            active_df['total_cost'] > 0, 
-            (active_df['pl_amt'] / active_df['total_cost']) * 100, 
-            0
-        )
-        
-        total_portfolio_value = active_df['current_val'].sum()
-        active_df['weight'] = np.where(
-            total_portfolio_value > 0,
-            (active_df['current_val'] / total_portfolio_value) * 100,
-            0
-        )
-        
-        # Breakeven logic (NEPSE broker fee + SEBON/DP approx)
+        total_val = active_df['current_val'].sum()
+        active_df['weight'] = np.where(total_val > 0, (active_df['current_val'] / total_val) * 100, 0)
         active_df['breakeven'] = (active_df['wacc'] * 1.005) + (25 / active_df['net_qty'])
 
-        # 5. Format Output
-        active_portfolio = []
-        for _, row in active_df.iterrows():
-            active_portfolio.append({
+        # 5. Build JSON Response
+        data_list = []
+        for _, row in active_df.sort_values('symbol').iterrows():
+            data_list.append({
                 "symbol": row['symbol'],
                 "net_qty": int(row['net_qty']),
                 "wacc": round(float(row['wacc']), 2),
@@ -124,20 +120,17 @@ def get_active_portfolio(engine = Depends(get_db_engine)):
                 "pl_pct": round(float(row['pl_pct']), 2),
                 "weight": round(float(row['weight']), 2)
             })
-            
-        active_portfolio = sorted(active_portfolio, key=lambda x: x['symbol'])
 
         return {
-            "status": "success", 
+            "status": "success",
             "summary": {
                 "total_invested": round(float(active_df['total_cost'].sum()), 2),
-                "total_current_value": round(float(total_portfolio_value), 2),
+                "total_current_value": round(float(total_val), 2),
                 "total_unrealized_pl": round(float(active_df['pl_amt'].sum()), 2),
                 "total_pl_pct": round(float((active_df['pl_amt'].sum() / active_df['total_cost'].sum()) * 100) if active_df['total_cost'].sum() > 0 else 0, 2)
             },
-            "data": active_portfolio
+            "data": data_list
         }
 
     except Exception as e:
-        print(f"❌ Error calculating active portfolio: {e}")
         raise HTTPException(status_code=500, detail=str(e))
