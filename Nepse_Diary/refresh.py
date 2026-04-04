@@ -16,7 +16,9 @@ async def manual_refresh(background_tasks: BackgroundTasks):
     
     # We run this as a background task so the user doesn't have to wait for the 
     # external API request to finish before getting a 'Success' response.
-    background_tasks.add_task(update_chukul_local_job)
+    
+    # force+True
+    background_tasks.add_task(update_chukul_local_job, force=True)
     
     return {
         "status": "refresh_triggered",
