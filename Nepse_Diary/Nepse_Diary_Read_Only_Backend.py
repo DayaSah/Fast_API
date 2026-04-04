@@ -12,6 +12,7 @@ from database import get_db_engine
 # We rename them during import to avoid "router" name collisions
 from active_portfolio import router as active_portfolio_router
 from history import router as history_router
+from refresh import router as refresh_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -85,3 +86,6 @@ app.include_router(active_portfolio_router, prefix="/api", tags=["Analytics"])
 
 # All your FIFO Trade History and Settlement math
 app.include_router(history_router, prefix="/api", tags=["History"])
+
+# Manual Refresh Endpoint
+app.include_router(refresh_router, prefix="/api")
