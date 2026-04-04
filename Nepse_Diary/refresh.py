@@ -1,28 +1,35 @@
-from fastapi import APIRouter, BackgroundTasks
-from active_portfolio import update_chukul_local_job, LOCAL_MARKET_CACHE
-import datetime
-import pytz
+import os
+import requests
+from fastapi import APIRouter, HTTPException
 
 router = APIRouter()
 
+# These must be set in Render Environment Variables
+GITHUB_PAT = os.getenv("GITHUB_PAT") 
+REPO_OWNER = "DayaSah"
+REPO_NAME = "My_Nepse_Diary"
+
 @router.post("/refresh-ltp", tags=["System"])
-async def manual_refresh(background_tasks: BackgroundTasks):
-    """
-    Manually triggers the Chukul LTP sync.
-    Uses BackgroundTasks so the API responds immediately while the fetch happens.
-    """
-    nepal_tz = pytz.timezone('Asia/Kathmandu')
-    now = datetime.datetime.now(nepal_tz).strftime("%H:%M:%S")
+async def trigger_github_refresh():
+    if not GITHUB_PAT:
+        raise HTTPException(status_code=500, detail="GITHUB_PAT not found in Environment Variables")
+
+    # GitHub API endpoint to trigger a 'repository_dispatch'
+    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/dispatches"
     
-    # We run this as a background task so the user doesn't have to wait for the 
-    # external API request to finish before getting a 'Success' response.
-    
-    # force+True
-    background_tasks.add_task(update_chukul_local_job, force=True)
-    
-    return {
-        "status": "refresh_triggered",
-        "requested_at": now,
-        "current_cache_status": LOCAL_MARKET_CACHE["status"],
-        "last_sync_was": LOCAL_MARKET_CACHE["last_updated"]
+    headers = {
+        "Authorization": f"token {GITHUB_PAT}",
+        "Accept": "application/vnd.github.v3+json",
     }
+    
+    # 'event_type' must match the YAML file in Step 2
+    payload = {"event_type": "trigger_nepse_sync"}
+
+    try:
+        response = requests.post(url, json=payload, headers=headers)
+        if response.status_code == 204:
+            return {"status": "success", "message": "GitHub Action triggered!"}
+        else:
+            return {"status": "error", "detail": response.text}
+    except Exception as e:
+        return {"status": "failed", "error": str(e)}
