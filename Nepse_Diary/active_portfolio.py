@@ -37,11 +37,23 @@ def update_chukul_local_job(force=False): # Add force parameter
     else:
         url = "https://chukul.com/api/data/v2/live-market/"
         headers = {"User-Agent": "Mozilla/5.0"}
-        try:
-            print("🚀 Fetching live data (Forced or Market Open)...")
+       try:
+            print("🚀 [DEBUG] Fetching Chukul Live Data...")
             response = requests.get(url, headers=headers, timeout=15)
+            
+            # --- NEW DEBUG LOGS ---
+            print(f"📡 [DEBUG] Status Code: {response.status_code}")
+            print(f"📡 [DEBUG] Response Headers: {response.headers}")
+            
+            # Print raw text (truncated to avoid huge logs)
+            raw_text = response.text[:1000] 
+            print(f"📡 [DEBUG] Raw Response (Partial): {raw_text}")
+            # ----------------------
+
             if response.status_code == 200:
                 data = response.json()
+                # ... (rest of your logic)
+                
                 new_prices = {str(item['symbol']).strip().upper(): float(item['ltp']) for item in data}
                 LOCAL_MARKET_CACHE["data"] = new_prices
                 LOCAL_MARKET_CACHE["last_updated"] = datetime.datetime.now(nepal_tz).strftime("%Y-%m-%d %H:%M:%S")
