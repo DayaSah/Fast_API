@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 from apscheduler.schedulers.background import BackgroundScheduler
 from database import get_db_engine
+from urllib.parse import quote
 
 router = APIRouter()
 
@@ -26,49 +27,54 @@ def is_market_open():
     end_time = now.replace(hour=15, minute=5, second=0, microsecond=0)
     return is_trading_day and (start_time <= now <= end_time)
 
-def update_chukul_local_job(force=False): # Add force parameter
+
+
+def update_chukul_local_job(force=False):
     nepal_tz = pytz.timezone('Asia/Kathmandu')
     
-    # Only skip if NOT forced AND market is closed
     if not force and not is_market_open():
         print(f"🕒 [{datetime.datetime.now(nepal_tz).strftime('%H:%M')}] Market Closed. Skipping.")
         LOCAL_MARKET_CACHE["status"] = "Market Closed"
         next_delay = 30 
     else:
-        url = "https://chukul.com/api/data/v2/live-market/"
+        # 1. Define the target URL
+        target_url = "https://chukul.com/api/data/v2/live-market/"
+        
+        # 2. Wrap it with the AllOrigins proxy bridge
+        # This helps bypass IP-based blocking from Render
+        proxy_url = f"https://api.allorigins.win/raw?url={quote(target_url)}"
+        
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json",
-            "Referer": "https://chukul.com/",
-            "Accept-Language": "en-US,en;q=0.9"
-}
-       try:
-            print("🚀 [DEBUG] Fetching Chukul Live Data...")
-            response = requests.get(url, headers=headers, timeout=15)
-            
-            # --- NEW DEBUG LOGS ---
-            print(f"📡 [DEBUG] Status Code: {response.status_code}")
-            print(f"📡 [DEBUG] Response Headers: {response.headers}")
-            
-            # Print raw text (truncated to avoid huge logs)
-            raw_text = response.text[:1000] 
-            print(f"📡 [DEBUG] Raw Response (Partial): {raw_text}")
-            # ----------------------
+            "Accept": "application/json"
+        }
 
+        try:
+            print(f"🚀 [DEBUG] Fetching via Proxy: {proxy_url}")
+            # Increase timeout because proxies add delay
+            response = requests.get(proxy_url, headers=headers, timeout=25)
+            
+            print(f"📡 [DEBUG] Proxy Status Code: {response.status_code}")
+            
             if response.status_code == 200:
                 data = response.json()
-                # ... (rest of your logic)
                 
-                new_prices = {str(item['symbol']).strip().upper(): float(item['ltp']) for item in data}
-                LOCAL_MARKET_CACHE["data"] = new_prices
-                LOCAL_MARKET_CACHE["last_updated"] = datetime.datetime.now(nepal_tz).strftime("%Y-%m-%d %H:%M:%S")
-                LOCAL_MARKET_CACHE["status"] = "Live (Forced)" if force else "Live"
-                print(f"✅ Sync Success: {len(new_prices)} symbols.")
+                # Check if data is a list (Chukul's usual format)
+                if isinstance(data, list):
+                    new_prices = {str(item['symbol']).strip().upper(): float(item['ltp']) for item in data}
+                    LOCAL_MARKET_CACHE["data"] = new_prices
+                    LOCAL_MARKET_CACHE["last_updated"] = datetime.datetime.now(nepal_tz).strftime("%Y-%m-%d %H:%M:%S")
+                    LOCAL_MARKET_CACHE["status"] = "Live (via Proxy)"
+                    print(f"✅ Sync Success: {len(new_prices)} symbols.")
+                else:
+                    print("⚠️ [DEBUG] Data received but it's not a list.")
+                    LOCAL_MARKET_CACHE["status"] = "Unexpected Data Format"
             else:
-                LOCAL_MARKET_CACHE["status"] = f"API Error {response.status_code}"
+                LOCAL_MARKET_CACHE["status"] = f"Proxy Error {response.status_code}"
+                
         except Exception as e:
-            print(f"❌ Fetch Error: {e}")
-            LOCAL_MARKET_CACHE["status"] = "Fetch Failed"
+            print(f"❌ Proxy Fetch Error: {e}")
+            LOCAL_MARKET_CACHE["status"] = "Fetch Failed (Proxy Timeout)"
         
         next_delay = random.randint(2, 5)
 
@@ -80,7 +86,6 @@ def update_chukul_local_job(force=False): # Add force parameter
         id='chukul_sync_job',
         replace_existing=True
     )
-
 scheduler = BackgroundScheduler()
 scheduler.add_job(func=update_chukul_local_job, trigger='date', run_date=datetime.datetime.now())
 scheduler.start()
