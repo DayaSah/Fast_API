@@ -1,5 +1,7 @@
 import os
 import requests
+import datetime
+import pytz
 from fastapi import APIRouter, HTTPException
 
 router = APIRouter()
@@ -11,10 +13,16 @@ REPO_NAME = "My_Nepse_Diary"
 
 @router.post("/refresh-ltp", tags=["System"])
 async def trigger_github_refresh():
+    """
+    This endpoint 'pings' GitHub Actions to run the scraper.
+    """
     if not GITHUB_PAT:
-        raise HTTPException(status_code=500, detail="GITHUB_PAT not found in Environment Variables")
+        raise HTTPException(status_code=500, detail="GITHUB_PAT not found in Render Env Vars")
 
-    # GitHub API endpoint to trigger a 'repository_dispatch'
+    nepal_tz = pytz.timezone('Asia/Kathmandu')
+    now = datetime.datetime.now(nepal_tz).strftime("%H:%M:%S")
+
+    # GitHub API URL
     url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/dispatches"
     
     headers = {
@@ -22,14 +30,27 @@ async def trigger_github_refresh():
         "Accept": "application/vnd.github.v3+json",
     }
     
-    # 'event_type' must match the YAML file in Step 2
-    payload = {"event_type": "trigger_nepse_sync"}
+    # CRITICAL: 'event_type' must match the 'types' in your .yml file
+    payload = {
+        "event_type": "trigger_nepse_sync",
+        "client_payload": {"triggered_at": now}
+    }
 
     try:
-        response = requests.post(url, json=payload, headers=headers)
+        # Use a short timeout here so the API responds quickly
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        
         if response.status_code == 204:
-            return {"status": "success", "message": "GitHub Action triggered!"}
+            return {
+                "status": "success",
+                "message": "GitHub Action (LTP_sync.yml) triggered!",
+                "requested_at": now
+            }
         else:
-            return {"status": "error", "detail": response.text}
+            return {
+                "status": "error", 
+                "github_response": response.text,
+                "status_code": response.status_code
+            }
     except Exception as e:
-        return {"status": "failed", "error": str(e)}
+        raise HTTPException(status_code=500, detail=f"Connection to GitHub failed: {str(e)}")
