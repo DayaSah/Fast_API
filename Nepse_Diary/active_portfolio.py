@@ -36,7 +36,12 @@ def update_chukul_local_job(force=False): # Add force parameter
         next_delay = 30 
     else:
         url = "https://chukul.com/api/data/v2/live-market/"
-        headers = {"User-Agent": "Mozilla/5.0"}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+            "Referer": "https://chukul.com/",
+            "Accept-Language": "en-US,en;q=0.9"
+}
        try:
             print("🚀 [DEBUG] Fetching Chukul Live Data...")
             response = requests.get(url, headers=headers, timeout=15)
