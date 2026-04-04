@@ -71,3 +71,4 @@ async def trigger_github_action():
 # --- PLUG IN THE ACTIVE PORTFOLIO ROUTER ---
 # REMOVED: raw_tables_router and trade_history_router (to fix the NameError)
 app.include_router(active_portfolio_router, prefix="/api", tags=["Analytics"])
+app.include_router(history.router, prefix="/api")
