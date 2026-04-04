@@ -142,59 +142,75 @@ def calculate_fifo_wacc(df):
 @router.get("/active_portfolio")
 def get_active_portfolio(engine = Depends(get_db_engine)):
     try:
+        # 1. Fetch Transaction History
         with engine.connect() as conn:
             query = text("SELECT symbol, qty, net_amount, transaction_type, date FROM public.portfolio")
             port_df = pd.read_sql(query, con=conn)
             
         if port_df.empty:
-            return {"status": "success", "data": []}
+            return {"status": "success", "data": [], "message": "Portfolio is empty."}
         
+        # 2. Process FIFO logic
         active_df = calculate_fifo_wacc(port_df)
+        
+        # 3. Get Live Prices from RAM
         live_prices = LOCAL_MARKET_CACHE["data"]
 
-        # IMPROVED MAPPING: Clean keys to avoid "stuck at WACC" issue
-        active_df['ltp'] = active_df['symbol'].str.strip().upper().map(live_prices).fillna(active_df['wacc'])
+        # FIX: Use .str accessor to handle the entire column at once
+        # Also strip spaces to ensure 'NHPC' matches 'NHPC '
+        active_df['lookup_sym'] = active_df['symbol'].astype(str).str.strip().str.upper()
+        
+        # 4. Map LTP and fallback to WACC
+        active_df['ltp'] = active_df['lookup_sym'].map(live_prices).fillna(active_df['wacc'])
 
         results = []
         total_inv = 0
-        total_curr = 0
+        total_receivable = 0
 
         for _, row in active_df.iterrows():
-            # Calculate Real-World P/L
-            receivable, total_charges = calculate_net_sell_receivable(row['ltp'], row['net_qty'], row['wacc'])
+            # Calculate Real-World P/L (Net of Fees & 7.5% CGT)
+            receivable, total_exit_fees = calculate_net_sell_receivable(
+                float(row['ltp']), 
+                int(row['net_qty']), 
+                float(row['wacc'])
+            )
             
-            real_pl = receivable - row['total_cost']
-            real_pl_pct = (real_pl / row['total_cost'] * 100) if row['total_cost'] > 0 else 0
+            total_cost = float(row['total_cost'])
+            real_pl = receivable - total_cost
+            real_pl_pct = (real_pl / total_cost * 100) if total_cost > 0 else 0
             
-            total_inv += row['total_cost']
-            total_curr += receivable # Using actual take-home value
+            total_inv += total_cost
+            total_receivable += receivable 
 
             results.append({
                 "symbol": row['symbol'],
                 "net_qty": int(row['net_qty']),
-                "wacc": round(row['wacc'], 2),
-                "ltp": round(row['ltp'], 2),
-                "total_cost": round(row['total_cost'], 2),
-                "receivable_val": round(receivable, 2), # If you sold everything now
-                "total_exit_charges": round(total_charges, 2), # Fees + Tax
-                "real_pl_amt": round(real_pl, 2), # True Profit
-                "real_pl_pct": round(real_pl_pct, 2)
+                "wacc": round(float(row['wacc']), 2),
+                "ltp": round(float(row['ltp']), 2),
+                "total_cost": round(total_cost, 2),
+                "receivable_val": round(float(receivable), 2), 
+                "exit_charges": round(float(total_exit_fees), 2), 
+                "real_pl_amt": round(float(real_pl), 2), 
+                "real_pl_pct": round(float(real_pl_pct), 2)
             })
 
         return {
             "status": "success",
             "metadata": {
-                "market": LOCAL_MARKET_CACHE["status"],
-                "last_sync": LOCAL_MARKET_CACHE["last_updated"]
+                "market_status": LOCAL_MARKET_CACHE["status"],
+                "last_sync": LOCAL_MARKET_CACHE["last_updated"],
+                "server_time": datetime.datetime.now(pytz.timezone('Asia/Kathmandu')).strftime("%H:%M:%S")
             },
             "summary": {
-                "total_invested": round(total_inv, 2),
-                "net_liquid_value": round(total_curr, 2),
-                "actual_profit": round(total_curr - total_inv, 2)
+                "total_invested": round(float(total_inv), 2),
+                "net_liquid_value": round(float(total_receivable), 2),
+                "actual_profit": round(float(total_receivable - total_inv), 2),
+                "overall_gain_pct": round(float(((total_receivable - total_inv) / total_inv) * 100) if total_inv > 0 else 0, 2)
             },
             "data": results
         }
 
     except Exception as e:
-        print(f"🚨 API ERROR: {e}")
+        # This will print the EXACT line and error in your Render logs
+        print(f"🚨 [CRITICAL API ERROR]: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
