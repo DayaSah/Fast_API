@@ -5,10 +5,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from sqlalchemy import text
 
-# Import our database and the specific router you need
+# --- DATABASE ENGINE ---
 from database import get_db_engine
-# Only keeping the active_portfolio_router as requested
+
+# --- ROUTER IMPORTS ---
+# We rename them during import to avoid "router" name collisions
 from active_portfolio import router as active_portfolio_router
+from history import router as history_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -24,12 +27,17 @@ async def lifespan(app: FastAPI):
     yield
 
 # APP INITIALIZATION
-app = FastAPI(title="NEPSE Diary API", lifespan=lifespan, docs_url=None, redoc_url=None)
+app = FastAPI(
+    title="NEPSE Diary API", 
+    lifespan=lifespan, 
+    docs_url="/docs", # Set to None in production if you want to hide it
+    redoc_url=None
+)
 
 # --- CORS SECURITY ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=["*"],  # Allows all origins (good for development)
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"], 
     allow_headers=["*"],
@@ -37,7 +45,10 @@ app.add_middleware(
 
 @app.get("/")
 def read_root():
-    return {"message": "Active Portfolio API is Live."}
+    return {
+        "message": "NEPSE Diary Cloud API is Live.",
+        "endpoints": ["/api/active_portfolio", "/api/trade_history", "/api/sync"]
+    }
 
 # --- GITHUB ACTION SYNC ENDPOINT ---
 @app.post("/api/sync")
@@ -68,7 +79,9 @@ async def trigger_github_action():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- PLUG IN THE ACTIVE PORTFOLIO ROUTER ---
-# REMOVED: raw_tables_router and trade_history_router (to fix the NameError)
+# --- PLUG IN THE ROUTERS ---
+# All your Live Market and WACC math
 app.include_router(active_portfolio_router, prefix="/api", tags=["Analytics"])
-app.include_router(history.router, prefix="/api")
+
+# All your FIFO Trade History and Settlement math
+app.include_router(history_router, prefix="/api", tags=["History"])
