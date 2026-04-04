@@ -26,32 +26,36 @@ def is_market_open():
     end_time = now.replace(hour=15, minute=5, second=0, microsecond=0)
     return is_trading_day and (start_time <= now <= end_time)
 
-def update_chukul_local_job():
+def update_chukul_local_job(force=False): # Add force parameter
     nepal_tz = pytz.timezone('Asia/Kathmandu')
     
-    if not is_market_open():
+    # Only skip if NOT forced AND market is closed
+    if not force and not is_market_open():
+        print(f"🕒 [{datetime.datetime.now(nepal_tz).strftime('%H:%M')}] Market Closed. Skipping.")
         LOCAL_MARKET_CACHE["status"] = "Market Closed"
         next_delay = 30 
     else:
         url = "https://chukul.com/api/data/v2/live-market/"
         headers = {"User-Agent": "Mozilla/5.0"}
         try:
+            print("🚀 Fetching live data (Forced or Market Open)...")
             response = requests.get(url, headers=headers, timeout=15)
             if response.status_code == 200:
                 data = response.json()
-                # FIX: Strip whitespace and handle symbol mapping strictly
                 new_prices = {str(item['symbol']).strip().upper(): float(item['ltp']) for item in data}
                 LOCAL_MARKET_CACHE["data"] = new_prices
-                LOCAL_MARKET_CACHE["last_updated"] = datetime.datetime.now(nepal_tz).strftime("%H:%M:%S")
-                LOCAL_MARKET_CACHE["status"] = "Live"
+                LOCAL_MARKET_CACHE["last_updated"] = datetime.datetime.now(nepal_tz).strftime("%Y-%m-%d %H:%M:%S")
+                LOCAL_MARKET_CACHE["status"] = "Live (Forced)" if force else "Live"
                 print(f"✅ Sync Success: {len(new_prices)} symbols.")
             else:
                 LOCAL_MARKET_CACHE["status"] = f"API Error {response.status_code}"
         except Exception as e:
+            print(f"❌ Fetch Error: {e}")
             LOCAL_MARKET_CACHE["status"] = "Fetch Failed"
         
         next_delay = random.randint(2, 5)
 
+    # Re-schedule the next regular job
     scheduler.add_job(
         func=update_chukul_local_job,
         trigger='date',
