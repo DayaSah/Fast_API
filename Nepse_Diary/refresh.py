@@ -1,60 +1,59 @@
 import os
 import requests
-import datetime
-import pytz
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
+from pydantic import BaseModel
 
 router = APIRouter()
 
-# Environment Variables from Render
+# --- CONFIGURATION ---
+# These must be set in your Render Environment Variables
 GITHUB_PAT = os.getenv("GITHUB_PAT")
 REPO_OWNER = "DayaSah"
 REPO_NAME = "My_Nepse_Diary"
+WORKFLOW_ID = "LTP_sync.yml"
 
 @router.post("/refresh-ltp")
-async def trigger_github_refresh():
+async def trigger_github_sync():
     """
-    Triggers the GitHub Action 'LTP_sync.yml' using Repository Dispatch.
+    Dispatches a repository_dispatch event to GitHub Actions 
+    to trigger the LTP_sync.yml workflow.
     """
     if not GITHUB_PAT:
-        raise HTTPException(
-            status_code=500, 
-            detail="GITHUB_PAT is missing in Render environment variables."
-        )
+        raise HTTPException(status_code=500, detail="GITHUB_PAT not configured on server.")
 
-    nepal_tz = pytz.timezone('Asia/Kathmandu')
-    now = datetime.datetime.now(nepal_tz).strftime("%H:%M:%S")
-
-    # The Repository Dispatch URL (Signals the whole repo)
+    # GitHub API URL for Repository Dispatch
     url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/dispatches"
-    
+
     headers = {
-        "Authorization": f"token {GITHUB_PAT}",
-        "Accept": "application/vnd.github.v3+json",
+        "Authorization": f"Bearer {GITHUB_PAT}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28"
     }
-    
-    # 'event_type' matches the 'types' in your LTP_sync.yml
-    payload = {
-        "event_type": "trigger_nepse_sync",
-        "client_payload": {"triggered_at": now}
+
+    # 'event_type' must match the 'types' under 'repository_dispatch' in your YAML
+    data = {
+        "event_type": "trigger-ltp-sync", 
+        "client_payload": {
+            "origin": "FastAPI_Render_Terminal"
+        }
     }
 
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        response = requests.post(url, headers=headers, json=data)
         
-        # GitHub returns 204 No Content on a successful dispatch
+        # GitHub returns 204 No Content on successful dispatch
         if response.status_code == 204:
             return {
                 "status": "success",
-                "message": "GitHub Action triggered successfully.",
-                "timestamp": now
+                "message": "GitHub Workflow dispatched successfully. Prices will update in ~1 minute.",
+                "target_repo": f"{REPO_OWNER}/{REPO_NAME}"
             }
         else:
             return {
-                "status": "github_error",
+                "status": "error",
                 "code": response.status_code,
                 "detail": response.text
             }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to connect to GitHub: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to communicate with GitHub: {str(e)}")
